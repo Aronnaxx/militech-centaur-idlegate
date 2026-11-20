@@ -1,18 +1,23 @@
 --- a/bin/x64/plugins/cyber_engine_tweaks/mods/MilitechCentaur/init.lua
 +++ b/bin/x64/plugins/cyber_engine_tweaks/mods/MilitechCentaur/init.lua
-@@ -3168,6 +3168,80 @@
+@@ -3168,6 +3168,99 @@
      end
      log('PHOTO304 photo mode %s while piloting: mech camera %s',on and 'on' or 'off',on and 'released' or 'restored')
  end
-+-- IDLEGATE v1.0 (MilitechCentaur-IdleGate, a local patch; not the mod author's code).
++-- IDLEGATE v1.1 (MilitechCentaur-IdleGate, a local patch; not the mod author's code).
 +-- With no Centaur out, nothing queued and no sequence running, the update below still ran the
 +-- session probe (about 9 game calls, 4 new objects) and the input / tick stages (about 8 more game
-+-- calls) on every frame: 0.09-0.13 ms per frame at Golden Pacific (RedProfiler 2026-11-19).
++-- calls) on every frame: 0.09-0.10 ms per frame at Golden Pacific (RedProfiler 2026-11-19).
 +-- While that quiet state holds, the whole update now runs once per G.period seconds of frame time
-+-- instead of every frame. The check itself is plain Lua (no game call). Anything that starts work
-+-- (a queued key, a phone / vehicle-list call, a queued settings change, a summon, the companion,
-+-- a prompt, a save lock that is not settled) ends the quiet state on the same frame, so nothing is
-+-- delayed by the gate; what the gate does not know about is seen at the next poll (<= G.period).
++-- instead of every frame. Two checks, both plain Lua (no game call):
++--   full check (quiet): once per period, on the frame after each poll, i.e. right after the update
++--     that could have started something (a summon, the companion, a prompt, a save lock ...);
++--   fast check: on every skipped frame, only what can change without the update running: the state
++--     and the four event flags set by observers (queued key, phone / vehicle-list call, incap,
++--     settings). Any of them ends the quiet state on the same frame, so a key press is not delayed.
++-- (v1.0 ran the full check on every frame: measured 15 us per skipped frame under RedProfiler.)
++-- What only the console / another mod can change between two polls (e.g. GetMod(..).summon()) is
++-- seen at the next poll, at most G.period later. Not quiet in the first 10 s of a world.
 +-- The skipped time is added to the mod clock on the next update that passes the session gate, so
 +-- the mod's 0.5 s / 1 s timers (parked place, quest, vehicle list) keep real time.
 +-- Console: GetMod('MilitechCentaur').idleGate()           status line
@@ -21,12 +26,13 @@
 +-- Functions on M survive the per-world reset (it clears only non-function fields); the state lives
 +-- in this closure, so no new top-level local is added to this file.
 +M.idleGateTick,M.idleGateCarry,M.idleGate=(function()
-+    local G={on=true,period=.25,acc=0,carry=0,skipped=0,polls=0,busy=0,why='not run yet'}
++    local G={on=true,period=.25,acc=0,carry=0,cached=false,skipped=0,polls=0,busy=0,checks=0,why='not run yet'}
 +    local function quiet()
 +        if M.state~='idle'then return false,'state '..tostring(M.state)end
 +        local s=M.session
 +        if not s or(s.state~='active'and s.state~='paused')then return false,'session not owned'end
 +        if not M.initialized or not M.recovered or M.id or M.entity then return false,'mech out or recovery pending'end
++        if M.clock<10 then return false,'first 10 s of the world'end
 +        if M.keyQueue471 or M.phoneSummon334 or M.incapQueued688 or M.settingsQueued688 then return false,'queued event'end
 +        if M.comp325 or M.companionPrompt325 or M.wake325 or M.sentinelSeq324 or M.ghostExit340 or M.ghostBoard340 then return false,'companion'end
 +        if M.summonTpp277 or M.summonTppRestore277 or M.refresh274 or M.wornRestoreAt664 or M.freeze316
@@ -46,22 +52,35 @@
 +        end
 +        return true
 +    end
++    -- One quiet frame: true = skip it; false = the period is over, run the update (a poll). After a
++    -- poll the full check runs again before anything is skipped.
++    local function count(dt)
++        if type(dt)~='number'then dt=0 end
++        local acc=G.acc+dt
++        if acc<G.period then G.acc=acc;G.skipped=G.skipped+1;return true end
++        -- the time of the skipped frames (not this frame's own dt) is owed to the mod clock
++        G.carry=math.max(0,math.min(1,acc-dt));G.acc=0;G.polls=G.polls+1;G.cached=false
++        return false
++    end
 +    -- true = skip this frame's update.
 +    local function tick(dt)
++        if G.cached then
++            if M.state=='idle'and not(M.keyQueue471 or M.phoneSummon334 or M.incapQueued688 or M.settingsQueued688)then
++                return count(dt)
++            end
++            G.cached=false
++        end
 +        if not G.on then return false end
 +        local ok,q,why=pcall(quiet)
++        G.checks=G.checks+1
 +        if not ok then
 +            G.on=false;G.why='off after an error: '..tostring(q)
 +            log('IDLEGATE %s',G.why)
 +            return false
 +        end
 +        if not q then G.acc=0;G.carry=0;G.why=why;G.busy=G.busy+1;return false end
-+        dt=tonumber(dt)or 0
-+        G.acc=G.acc+dt
-+        if G.acc<G.period then G.skipped=G.skipped+1;return true end
-+        -- a poll: the time of the skipped frames (not this frame's own dt) is owed to the mod clock
-+        G.carry=math.max(0,math.min(1,G.acc-dt));G.acc=0;G.polls=G.polls+1;G.why='quiet'
-+        return false
++        G.cached=true;G.why='quiet'
++        return count(dt)
 +    end
 +    -- Called once the session gate passed (the world runs): the owed time goes to the mod clock.
 +    local function carry()
@@ -69,10 +88,10 @@
 +        if c>0 then G.carry=0;M.clock=(M.clock or 0)+c end
 +    end
 +    local function status(on,period)
-+        if on~=nil then G.on=on==true;G.acc=0;G.carry=0 end
++        if on~=nil then G.on=on==true;G.cached=false;G.acc=0;G.carry=0 end
 +        if tonumber(period)then G.period=math.max(.05,math.min(2,tonumber(period)))end
-+        local text=string.format('IDLEGATE %s, poll every %.2f s; frames skipped %d, polls %d, full-rate frames %d; last: %s',
-+            G.on and'on'or'off',G.period,G.skipped,G.polls,G.busy,tostring(G.why))
++        local text=string.format('IDLEGATE %s, poll every %.2f s; frames skipped %d, polls %d, full-rate frames %d, full checks %d; last: %s',
++            G.on and'on'or'off',G.period,G.skipped,G.polls,G.busy,G.checks,tostring(G.why))
 +        log('%s',text)
 +        return text
 +    end
@@ -81,15 +100,15 @@
  registerForEvent('onUpdate',function(dt)
      -- BUILD466: nothing touches the game between a player detach and the new player's attach (a load).
      -- BUILD701 diagnostic (debugLog): the frames skipped, logged at the attach (LOAD701) - pure Lua, no game call.
-@@ -3178,6 +3252,7 @@
+@@ -3177,6 +3270,7 @@
+     end
      -- BUILD548: the required-mods check, before the session gate (it also runs when the mod could
      -- not initialize); once per game launch (Deps548.lua).
-     try('depsTick548',M.depsTick548,dt)
 +    if M.idleGateTick(dt)then return end -- IDLEGATE: nothing out, nothing queued: polled, not run every frame
+     try('depsTick548',M.depsTick548,dt)
      local gateOK,step=pcall(function()return M.session:frame(dt)end)
      if not gateOK then M.session:invalidate('session probe/setup failed');log('SESSION249 gate refused: %s',tostring(step));return end
-     -- BUILD503: the photo-mode check runs only in an owned world (it was before the session gate,
-@@ -3221,6 +3296,7 @@
+@@ -3221,6 +3315,7 @@
          end
      end
      if step==nil then if M.input then M.input:clearQueuedInput()end;return end

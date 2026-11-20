@@ -12,7 +12,7 @@ field would read as nil = "nothing running" and the gate would throttle a live s
 """
 import hashlib, os, pathlib, re, sys, zipfile
 
-VERSION = "1.0"
+VERSION = "1.1"
 HERE = pathlib.Path(__file__).parent
 REPO = HERE
 REL = "bin/x64/plugins/cyber_engine_tweaks/mods/MilitechCentaur/init.lua"
@@ -25,11 +25,12 @@ EDITS = [
     # 1. the gate's functions, defined right before the update handler
     ("registerForEvent('onUpdate',function(dt)\n",
      "{BLOCK}registerForEvent('onUpdate',function(dt)\n"),
-    # 2. skip the frame before the session probe (after the load hold and the once-per-launch mods check)
+    # 2. skip the frame right after the load hold, before the mods check and the session probe (the gate
+    #    is never quiet in the first 10 s of a world, so the once-per-launch mods check has run by then)
     ("    try('depsTick548',M.depsTick548,dt)\n"
      "    local gateOK,step=pcall(function()return M.session:frame(dt)end)\n",
-     "    try('depsTick548',M.depsTick548,dt)\n"
      "    if M.idleGateTick(dt)then return end -- IDLEGATE: nothing out, nothing queued: polled, not run every frame\n"
+     "    try('depsTick548',M.depsTick548,dt)\n"
      "    local gateOK,step=pcall(function()return M.session:frame(dt)end)\n"),
     # 3. the world runs: hand the skipped time to the mod clock before the update
     ("    if step==nil then if M.input then M.input:clearQueuedInput()end;return end\n"
