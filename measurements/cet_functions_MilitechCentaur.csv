@@ -1,0 +1,5 @@
+capture,cet_mod,source,line,calls,exclusive_ms,share_pct,inclusive_ms,max_ms,avg_us,main_ms,worker_ms,gc_ms
+2026-11-19_1614,MilitechCentaur,init.lua,3171,6232,549.686,3.24,589.149,3.640,88.2,549.686,0.000,0.000
+2026-11-19_1614,MilitechCentaur,init.lua,3315,6232,15.459,0.09,15.459,0.060,2.5,15.459,0.000,0.000
+2026-11-19_1731,MilitechCentaur,init.lua,3171,5379,468.445,3.83,500.042,1.416,87.1,468.445,0.000,0.000
+2026-11-19_1731,MilitechCentaur,init.lua,3315,5379,14.531,0.12,14.531,0.112,2.7,14.531,0.000,0.000
